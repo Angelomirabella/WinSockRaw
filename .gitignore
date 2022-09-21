@@ -1,4 +1,12 @@
 .vs/
+x64/
+examples/Injector/Injector.vcxproj.filters
+examples/Injector/Injector.vcxproj.user
+examples/Receiver/Receiver.vcxproj.filters
+examples/Receiver/Receiver.vcxproj.user
+Debug/
+Release/
+WinSockRawDll/WinSockRawDll.vcxproj.filters
 WinSockRawDriver/x64/
 WinSockRawDriver/WinSockRawDriver.vcxproj.filters
 WinSockRawDriver/WinSockRawDriver.vcxproj.user

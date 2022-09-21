@@ -1,11 +1,15 @@
 #include <ntddk.h>
 
+#include "WinSockRawDriver.h"
+
+
+// Context.
+WinSockRawContext context{};
 
 // Function declarations.
 void WinSockRawDriverUnload(PDRIVER_OBJECT DriverObject);
 NTSTATUS WinSockRawDriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp);
-NTSTATUS WinSockRawDriverRead(PDEVICE_OBJECT DeviceObject, PIRP Irp);
-NTSTATUS WinSockRawDriverWrite(PDEVICE_OBJECT DeviceObject, PIRP Irp);
+NTSTATUS WinSockRawDriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp);
 
 // Driver entrypoint.
 extern "C" NTSTATUS  DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
@@ -37,8 +41,7 @@ extern "C" NTSTATUS  DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Re
 	DriverObject->DriverUnload = WinSockRawDriverUnload;
 	DriverObject->MajorFunction[IRP_MJ_CREATE] = WinSockRawDriverCreateClose;
 	DriverObject->MajorFunction[IRP_MJ_CLOSE] = WinSockRawDriverCreateClose;
-	DriverObject->MajorFunction[IRP_MJ_READ] = WinSockRawDriverRead;
-	DriverObject->MajorFunction[IRP_MJ_WRITE] = WinSockRawDriverWrite;
+	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = WinSockRawDriverDeviceControl;
 
     return status;
 }
@@ -54,21 +57,15 @@ void WinSockRawDriverUnload(PDRIVER_OBJECT DriverObject) {
 // Creation/Closing routine (unused).
 NTSTATUS WinSockRawDriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
 	UNREFERENCED_PARAMETER(DeviceObject);
-	UNREFERENCED_PARAMETER(Irp);
 
+	Irp->IoStatus.Status = STATUS_SUCCESS;
+	Irp->IoStatus.Information = 0;
+	IoCompleteRequest(Irp, IO_NO_INCREMENT);
 	return STATUS_SUCCESS;
 }
 
-// Frame reading routine.
-NTSTATUS WinSockRawDriverRead(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
-	UNREFERENCED_PARAMETER(DeviceObject);
-	UNREFERENCED_PARAMETER(Irp);
-
-	return STATUS_SUCCESS;
-}
-
-// Frame injection routine.
-NTSTATUS WinSockRawDriverWrite(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
+// Main routine (binding/reading/writing).
+NTSTATUS WinSockRawDriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
 	UNREFERENCED_PARAMETER(DeviceObject);
 	UNREFERENCED_PARAMETER(Irp);
 
