@@ -2,22 +2,65 @@
 //
 
 #include <windows.h>
+
+#include <iostream>
+#include <string>
+
 #include "winsockraw.h"
 
+// Buffer len (8KB)
+#define BUFLEN 8192
 
-int main()
-{
-    HANDLE hSocket = SocketRawOpen(0);
-    return 0;
+
+void dumpBufasHex(char* buf, UINT32 len) {
+    for (UINT32 i = 0; i < len; ++i) {
+        printf("%02X ", (UINT8)buf[i]);
+    }
+    printf("\n");
 }
 
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
+int wmain(int argc, wchar_t *argv[]) {
+    if (argc < 2) {
+        std::cout << "Usage: Receiver.exe <n_packets> [interface]" << std::endl;
+        return 1;
+    }
 
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
+    int n_packets = _wtoi(argv[1]);
+    UINT32 interfaceIndex = WINSOCKRAW_INTERACE_ANY_INDEX;
+    if (argc > 2) {
+        interfaceIndex = _wtoi(argv[2]);
+    }
+
+    HANDLE hSocket = SocketRawOpen();
+    if (hSocket == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed opening raw socket due to error: " << GetLastError() << std::endl;
+    }
+
+    if (!SocketRawBind(hSocket, interfaceIndex)) {
+        std::cerr << "Failed binding raw socket due to error: " << GetLastError() << std::endl;
+    }
+
+    int i = 0;
+    // Allocate buffer of 16KB;
+    UINT32 len = BUFLEN;
+    char buf[BUFLEN];
+    while (i < n_packets) {
+        int readBytes = SocketRawRecv(hSocket, buf, len);
+
+        // If we `readBytes` == `len` check if the packet is truncated.
+        if (readBytes == len && GetLastError() == WSAEMSGSIZE) {
+            std::cerr << "Packet: " << i << " is truncated becuase input buffer was too small" << std::endl;
+        }
+
+        // Display hex data.
+        std::cout << "Packet: " << i << " len: " << readBytes << std::endl;
+        std::cout << "Packet: " << i << " content: " << std::endl;
+        dumpBufasHex(buf, readBytes);
+
+        ++i;
+    }
+    
+
+    SocketRawClose(hSocket);
+    return 0;
+}
