@@ -190,5 +190,52 @@ VOID SocketRawClose(HANDLE hSocket) {
     }
 
     CloseHandle(hSocket);
+
+    // Stop the service.
+    SC_HANDLE hManager = nullptr;
+    SC_HANDLE hService = nullptr;
+    BOOL res = FALSE;
+
+    do {
+        hManager = OpenSCManager(nullptr, SERVICES_ACTIVE_DATABASE, SC_MANAGER_ALL_ACCESS);
+        if (hManager == nullptr) {
+            break;
+        }
+
+        hService = OpenService(hManager, WINSOCKRAW_DEVICE_NAME, SERVICE_ALL_ACCESS);
+        if (hService == nullptr) {
+            break;
+        }
+
+        SERVICE_STATUS_PROCESS ssp;
+        DWORD bytesNeeded;
+        if (!QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp,
+                                  sizeof(SERVICE_STATUS_PROCESS), &bytesNeeded)) {
+            break;
+        }
+
+        if (ssp.dwCurrentState == SERVICE_STOPPED || ssp.dwCurrentState == SERVICE_STOP_PENDING) {
+            // Nothing to do.
+            break;
+        }
+
+        // Stop the service.
+        if (!ControlService(hService, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS)&ssp)) {
+            break;
+        }
+
+        res = TRUE;
+    } while (FALSE);
+    
+    if (res == FALSE) {
+        printf("Failed stopping service, please stop manually running `sc stop winsockraw`\n");
+    }
+
+    if (hManager) {
+        CloseServiceHandle(hManager);
+    }
+    if (hService) {
+        CloseServiceHandle(hService);
+    }
     return;
 }
