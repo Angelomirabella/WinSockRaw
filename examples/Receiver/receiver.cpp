@@ -19,25 +19,28 @@ void dumpBufasHex(char* buf, UINT32 len) {
     printf("\n");
 }
 
-int wmain(int argc, wchar_t *argv[]) {
+int main(int argc, char *argv[]) {
     if (argc < 2) {
         std::cout << "Usage: Receiver.exe <n_packets> [interface]" << std::endl;
         return 1;
     }
 
-    int n_packets = _wtoi(argv[1]);
+    int n_packets = atoi(argv[1]);
     UINT32 interfaceIndex = WINSOCKRAW_INTERACE_ANY_INDEX;
     if (argc > 2) {
-        interfaceIndex = _wtoi(argv[2]);
+        interfaceIndex = atoi(argv[2]);
     }
 
     HANDLE hSocket = SocketRawOpen();
     if (hSocket == INVALID_HANDLE_VALUE) {
         std::cerr << "Failed opening raw socket due to error: " << GetLastError() << std::endl;
+        return 1;
     }
 
     if (!SocketRawBind(hSocket, interfaceIndex)) {
         std::cerr << "Failed binding raw socket due to error: " << GetLastError() << std::endl;
+        SocketRawClose(hSocket);
+        return 1;
     }
 
     int i = 0;

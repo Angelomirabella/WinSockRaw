@@ -2,6 +2,9 @@
 
 #include "WinSockCommon.h"
 
+#define NDIS630
+#include <ndis.h>
+
 #define PACKET_QUEUE_MAX_SIZE 1024
 #define TAG '4R4W'
 
@@ -44,4 +47,8 @@ typedef struct WinSockRawContext {
 	UINT32 mCalloutId = 0;
 	// Handle to filter engine (to unregister).
 	HANDLE engineHandle = nullptr;
+	// Handle to the NET_BUFFER_LIST pool for packet injection.
+	NDIS_HANDLE netPoolHandle = nullptr;
+	// Handle used to inject packets.
+	HANDLE injectionHandle = nullptr;
 } WinSockRawContext;

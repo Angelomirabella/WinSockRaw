@@ -1,13 +1,12 @@
 #include <ntddk.h>
 
-#define NDIS630
-#include <ndis.h>
+#include "WinSockRawDriver.h"
 
 #include <fwpsk.h>
 #include <initguid.h>
 #include <fwpmk.h>
 
-#include "WinSockRawDriver.h"
+
 
 
 namespace {
@@ -37,6 +36,16 @@ void WinSockRawContextCleanup() {
 	if (context.sCalloutId) {
 		FwpsCalloutUnregisterById(context.sCalloutId);
 		context.sCalloutId = 0;
+	}
+
+	if (context.netPoolHandle) {
+		NdisFreeNetBufferListPool(context.netPoolHandle);
+		context.netPoolHandle = nullptr;
+	}
+
+	if (context.injectionHandle) {
+		FwpsInjectionHandleDestroy(context.injectionHandle);
+		context.injectionHandle = nullptr;
 	}
 
 	// Cleanup packet queue.
@@ -245,6 +254,61 @@ bool WinSockRawBindInterface(PDEVICE_OBJECT DeviceObject, UINT32* interfaceIndex
 	return res;
 }
 
+void NTAPI WinSockRawInjectCompleteCallback(PVOID callbackContext, PNET_BUFFER_LIST netBuffers, 
+											BOOLEAN dispatchLevel) {
+	UNREFERENCED_PARAMETER(callbackContext);
+	UNREFERENCED_PARAMETER(dispatchLevel);
+
+	PNET_BUFFER netBuffer = NET_BUFFER_LIST_FIRST_NB(netBuffers);
+	PMDL mdl = NET_BUFFER_FIRST_MDL(netBuffer);
+	IoFreeMdl(mdl);
+	FwpsFreeNetBufferList(netBuffers);
+}
+
+NTSTATUS WinSockRawInjectFrame(UINT8* buffer, UINT32 bufLen) {
+	NTSTATUS status = STATUS_SUCCESS;
+	PMDL mdl = nullptr;
+	PNET_BUFFER_LIST netBuffers = nullptr;
+
+	do {
+		mdl = IoAllocateMdl(buffer, bufLen, FALSE, FALSE, nullptr);
+		if (!mdl) {
+			// Probably not enough resources.
+			KdPrint(("Failed to allocate MDL to inject frame of length %u\n", bufLen));
+			status = STATUS_INSUFFICIENT_RESOURCES;
+			break;
+		}
+		MmBuildMdlForNonPagedPool(mdl);
+
+		status = FwpsAllocateNetBufferAndNetBufferList(context.netPoolHandle, 0, 0, mdl, 0, bufLen, &netBuffers);
+		if (!NT_SUCCESS(status)) {
+			KdPrint(("Failed to allocate NET_BUFFER_LIST to inject frame of length %u\n", bufLen));
+			break;
+		}
+
+		// Inject frame.
+		status = FwpsInjectMacSendAsync(context.injectionHandle, nullptr, 0, FWPS_LAYER_INBOUND_MAC_FRAME_NATIVE,
+									    context.interfaceIndex, 0, netBuffers, WinSockRawInjectCompleteCallback, nullptr);
+		if (!NT_SUCCESS(status)) {
+			KdPrint(("Failed to inject frame of length %u\n", bufLen));
+			break;
+		}
+	} while (FALSE);
+
+	if (!NT_SUCCESS(status)) {
+		// Cleanup.
+		if (mdl) {
+			IoFreeMdl(mdl);
+		}
+
+		if (netBuffers) {
+			FwpsFreeNetBufferList(netBuffers);
+		}
+	}
+
+	return status;
+}
+
 }  // namespace.
 
 // Driver entrypoint.
@@ -271,18 +335,47 @@ extern "C" NTSTATUS  DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Re
 			KdPrint(("Failed to create sym link (0x%08X)\n", status));
 			break;
 		}
+
+		// Inititalize context.
+		KeInitializeEvent(&context.packetQueueEvent, NotificationEvent, FALSE);
+		KeInitializeSpinLock(&context.packetQueueLock);
+		InitializeListHead(&context.packetQueueHead);
+
+		NET_BUFFER_LIST_POOL_PARAMETERS netPoolParameters;
+
+		RtlZeroMemory(&netPoolParameters, sizeof(netPoolParameters));
+		netPoolParameters.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+		netPoolParameters.Header.Revision = NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
+		netPoolParameters.Header.Size = sizeof(netPoolParameters);
+		netPoolParameters.fAllocateNetBuffer = TRUE;
+		netPoolParameters.PoolTag = TAG;
+		netPoolParameters.DataSize = 0;
+
+		context.netPoolHandle = NdisAllocateNetBufferListPool(nullptr, &netPoolParameters);
+		if (!context.netPoolHandle) {
+			status = STATUS_INSUFFICIENT_RESOURCES;
+			KdPrint(("Failed to allocate NET_BUFFER_LIST pool"));
+			break;
+		}
+
+		// Injection handle (might move this later).
+		status = FwpsInjectionHandleCreate(AF_UNSPEC, FWPS_INJECTION_TYPE_L2, &context.injectionHandle);
+		if (!NT_SUCCESS(status)) {
+			KdPrint(("Failed to allocate injection handle"));
+			break;
+		}
 	} while (false);
+
+	if (!NT_SUCCESS(status)) {
+		WinSockRawDriverUnload(DriverObject);
+		return status;
+	}
 
 	// Set routines.
 	DriverObject->DriverUnload = WinSockRawDriverUnload;
 	DriverObject->MajorFunction[IRP_MJ_CREATE] = WinSockRawDriverCreate;
 	DriverObject->MajorFunction[IRP_MJ_CLOSE] = WinSockRawDriverClose;
 	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = WinSockRawDriverDeviceControl;
-
-	// Inititalize context.
-	KeInitializeEvent(&context.packetQueueEvent, NotificationEvent, FALSE);
-	KeInitializeSpinLock(&context.packetQueueLock);
-	InitializeListHead(&context.packetQueueHead);
 
 	return status;
 }
@@ -293,7 +386,11 @@ void WinSockRawDriverUnload(PDRIVER_OBJECT DriverObject) {
 
 	WinSockRawContextCleanup();
 	IoDeleteSymbolicLink(&symLink);
-	IoDeleteDevice(DriverObject->DeviceObject);
+
+	if (DriverObject->DeviceObject) {
+		IoDeleteDevice(DriverObject->DeviceObject);
+		DriverObject->DeviceObject = nullptr;
+	}
 }
 
 // Creation routine (unused).
@@ -402,6 +499,39 @@ NTSTATUS WinSockRawDriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
 			RtlCopyMemory(buffer, &packet->packetData, readLen);
 			ExFreePoolWithTag(packet, TAG);
 			count = truncated ? 0 : readLen;
+			break;
+		}
+		case IOCTL_WINSOCKRAW_WRITE: {
+			// If we are not bound to an interface, we fail.
+			if (!context.interfaceIndex) {
+				status = STATUS_REQUEST_OUT_OF_SEQUENCE;
+				break;
+			}
+
+			// If we are bound to `any` we cannot inject frames.
+			if (context.interfaceIndex == WINSOCKRAW_INTERACE_ANY_INDEX) {
+				status = STATUS_INVALID_PARAMETER;
+				break;
+			}
+
+			auto bufLen = deviceIoControl.OutputBufferLength;
+			if (!bufLen) {
+				// Complete the request successfully if the buffer has length 0.
+				break;
+			}
+
+			// Retrieve buffer.
+			PVOID buffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority);
+			if (!buffer) {
+				status = STATUS_INSUFFICIENT_RESOURCES;
+				break;
+			}
+
+			status = WinSockRawInjectFrame((UINT8*)buffer, bufLen);
+			if (NT_SUCCESS(status)) {
+				// If successfull, we sent the all frame.
+				count = bufLen;
+			}
 			break;
 		}
 		default:
