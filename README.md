@@ -67,7 +67,7 @@ The usual workflow of a client application should be:
    ---  ----------  ----------  ------------  ---------------------------
      1          75  4294967295  connected     Loopback Pseudo-Interface 1
      5          25        1500  connected     Ethernet (Kernel Debugger)
-  ```
+   ```
 	The index is shown in the first column (Idx).
  - Receive/Inject frames with `SocketRawRecv`/`SocketRawSend`.
  - Close the socket handle with `SocketRawClose`.
