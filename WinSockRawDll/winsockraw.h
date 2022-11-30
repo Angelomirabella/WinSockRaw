@@ -6,6 +6,9 @@
 #define WINSOCKRAW_API __declspec(dllimport)
 #endif
 
+#define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers.
+#include <windows.h>
+
 // Interface index any.
 #define WINSOCKRAW_INTERACE_ANY_INDEX   0xFFFFFFFF
 
